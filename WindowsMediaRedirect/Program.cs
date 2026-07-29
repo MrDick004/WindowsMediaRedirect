@@ -31,44 +31,51 @@ namespace WindowsMediaRedirect {
                 Console.WriteLine("Richiesta #{0}: {1}", ++requestCount, req.Url.ToString());
 
                 try {
-                    // 1. Gestione Metadati CD / Tracce
+                    // A. Gestione richieste metadati (MDR-CD / TOC)
                     if (req.Url.ToString().StartsWith("http://windowsmedia.com/redir/GetMDRCD.asp") || 
                         req.Url.ToString().StartsWith("http://windowsmedia.com/redir/QueryTOC.asp")) {
                         
-                        string queryString = req.Url.Query;
-                        OldMetadata.METADATA metadata = FetchMetadataFromMusicBrainz(queryString);
+                        // 1. Recupera metadati da MusicBrainz popolando la struttura OldMetadata
+                        OldMetadata.METADATA oldmeta = FetchFromMusicBrainz(req.Url.Query);
 
+                        // 2. Serializza in XML nativo di WMP
                         XmlSerializer oldSerializer = new XmlSerializer(typeof(OldMetadata.METADATA));
                         MemoryStream ms = new MemoryStream();
-                        
-                        using (XmlWriter writer = XmlWriter.Create(ms, new XmlWriterSettings { Encoding = Encoding.UTF8 })) {
-                            oldSerializer.Serialize(writer, metadata);
+
+                        XmlWriterSettings settings = new XmlWriterSettings {
+                            Encoding = Encoding.UTF8,
+                            Indent = true
+                        };
+
+                        using (XmlWriter writer = XmlWriter.Create(ms, settings)) {
+                            oldSerializer.Serialize(writer, oldmeta);
                         }
 
                         byte[] data = ms.ToArray();
+
                         resp.ContentType = "text/xml";
                         resp.ContentEncoding = Encoding.UTF8;
                         resp.ContentLength64 = data.LongLength;
                         resp.OutputStream.Write(data, 0, data.Length);
                     } 
-                    // 2. Gestione Copertine (Cover Art Archive)
+                    // B. Gestione chiamate per le copertine degli album
                     else if (req.Url.ToString().Contains("/cover/")) {
-                        // Estrae l'ID della release MusicBrainz passato nel percorso della copertina
-                        string releaseId = ExtractReleaseId(req.Url.ToString());
-                        byte[] coverData = FetchCoverArt(releaseId);
+                        string mbid = ExtractReleaseId(req.Url.ToString());
+                        byte[] coverBytes = FetchCoverArt(mbid);
 
-                        if (coverData != null && coverData.Length > 0) {
+                        if (coverBytes != null && coverBytes.Length > 0) {
                             resp.ContentType = "image/jpeg";
-                            resp.ContentLength64 = coverData.LongLength;
-                            resp.OutputStream.Write(coverData, 0, coverData.Length);
+                            resp.ContentLength64 = coverBytes.LongLength;
+                            resp.OutputStream.Write(coverBytes, 0, coverBytes.Length);
                         } else {
                             resp.StatusCode = 404;
                         }
-                    } else {
+                    } 
+                    else {
                         resp.StatusCode = 404;
                     }
                 } catch (Exception ex) {
-                    Console.WriteLine("Errore nell'elaborazione: " + ex.Message);
+                    Console.WriteLine("Errore interno: " + ex.Message);
                     resp.StatusCode = 500;
                 } finally {
                     resp.Close();
@@ -76,47 +83,47 @@ namespace WindowsMediaRedirect {
             }
         }
 
-        // Chiamata all'API MusicBrainz usando WebClient con User-Agent personalizzato
-        static OldMetadata.METADATA FetchMetadataFromMusicBrainz(string query) {
+        // Metodo principale per interrogare l'API di MusicBrainz
+        static OldMetadata.METADATA FetchFromMusicBrainz(string queryString) {
             OldMetadata.METADATA meta = new OldMetadata.METADATA();
             meta.MDRCD = new OldMetadata.MDRCD();
             meta.MDRCD.Version = "5.0";
+            meta.MDRCD.DataProvider = "MusicBrainz";
             meta.MDRCD.Track = new List<OldMetadata.Track>();
 
-            // Estrazione di parametri di ricerca basici inviati da WMP
-            string albumSearch = ExtractQueryParam(query, "album") ?? "Unknown Album";
-            string artistSearch = ExtractQueryParam(query, "artist") ?? "Unknown Artist";
+            // Estrazione parametri passati da WMP
+            string albumParam = ExtractQueryParam(queryString, "album") ?? "Album Sconosciuto";
+            string artistParam = ExtractQueryParam(queryString, "artist") ?? "Artista Sconosciuto";
 
             try {
                 using (WebClient wc = new WebClient()) {
-                    // MusicBrainz richiede obbligatoriamente un Header User-Agent identificativo
-                    wc.Headers.Add("User-Agent", "WMPRedirectProxy/2.0 ( contact@example.com )");
+                    // User-Agent IDENTIFICATIVO: Obbligatorio per non farsi bloccare da MusicBrainz
+                    wc.Headers.Add("User-Agent", "WindowsMediaRedirectProxy/2.0 ( https://github.com/makuhlmann/WindowsMediaRedirect )");
                     wc.Encoding = Encoding.UTF8;
 
-                    // Query di ricerca su MusicBrainz (formato JSON)
+                    // Query verso MusicBrainz in JSON
                     string searchUrl = string.Format("https://musicbrainz.org/ws/2/release/?query=release:{0}%20AND%20artist:{1}&fmt=json&limit=1", 
-                        Uri.EscapeDataString(albumSearch), Uri.EscapeDataString(artistSearch));
+                        Uri.EscapeDataString(albumParam), Uri.EscapeDataString(artistParam));
 
                     string jsonResponse = wc.DownloadString(searchUrl);
 
-                    // Estrazione semplificata dei campi via Regex per compatibilità con vecchi .NET
                     string mbid = ExtractJsonValue(jsonResponse, "id");
-                    string title = ExtractJsonValue(jsonResponse, "title") ?? albumSearch;
+                    string albumTitle = ExtractJsonValue(jsonResponse, "title") ?? albumParam;
 
-                    meta.MDRCD.AlbumTitle = title;
-                    meta.MDRCD.AlbumArtist = artistSearch;
-                    meta.MDRCD.Genre = "Rock/Pop"; 
+                    meta.MDRCD.AlbumTitle = albumTitle;
+                    meta.MDRCD.AlbumArtist = artistParam;
+                    meta.MDRCD.Genre = "MusicBrainz Match";
                     meta.MDRCD.WMCollectionID = mbid ?? Guid.NewGuid().ToString();
-                    
-                    // Se abbiamo trovato un ID album, impostiamo il link per il recupero copertina
+
+                    // Se viene trovato un MBID valido su MusicBrainz, passiamo l'URL per scaricare la copertina
                     if (!string.IsNullOrEmpty(mbid)) {
                         meta.MDRCD.LargeCoverParams = "http://services.windowsmedia.com/cover/" + mbid;
                     }
                 }
             } catch (Exception ex) {
-                Console.WriteLine("MusicBrainz offline o nessun risultato trovato: " + ex.Message);
-                meta.MDRCD.AlbumTitle = "Album Sconosciuto";
-                meta.MDRCD.AlbumArtist = "Artista Sconosciuto";
+                Console.WriteLine("Impossibile recuperare metadati da MusicBrainz: " + ex.Message);
+                meta.MDRCD.AlbumTitle = albumParam;
+                meta.MDRCD.AlbumArtist = artistParam;
             }
 
             meta.Backoff = new OldMetadata.Backoff();
@@ -125,28 +132,28 @@ namespace WindowsMediaRedirect {
             return meta;
         }
 
-        // Recupera l'immagine della copertina da Cover Art Archive (MusicBrainz)
+        // Recupero dell'immagine da Cover Art Archive
         static byte[] FetchCoverArt(string releaseId) {
             if (string.IsNullOrEmpty(releaseId)) return null;
 
             try {
                 using (WebClient wc = new WebClient()) {
-                    wc.Headers.Add("User-Agent", "WMPRedirectProxy/2.0 ( contact@example.com )");
+                    wc.Headers.Add("User-Agent", "WindowsMediaRedirectProxy/2.0");
                     string coverUrl = string.Format("https://coverartarchive.org/release/{0}/front-250", releaseId);
                     return wc.DownloadData(coverUrl);
                 }
             } catch {
-                return null; // Copertina non disponibile
+                return null;
             }
         }
 
-        // Helper per estrarre parametri dalla query string
+        // Helper per estrarre argomenti dalla Query String
         static string ExtractQueryParam(string query, string paramName) {
             Match match = Regex.Match(query, paramName + "=([^&]+)", RegexOptions.IgnoreCase);
             return match.Success ? Uri.UnescapeDataString(match.Groups[1].Value) : null;
         }
 
-        // Helper semplice per estrarre chiavi JSON senza librerie esterne (es. Newtonsoft.Json)
+        // Helper Regex leggero per deserializzare la risposta JSON senza librerie esterne
         static string ExtractJsonValue(string json, string key) {
             Match match = Regex.Match(json, "\"" + key + "\"\\s*:\\s*\"([^\"]+)\"");
             return match.Success ? match.Groups[1].Value : null;
@@ -162,8 +169,8 @@ namespace WindowsMediaRedirect {
                 ip = args[0];
             }
 
-            Console.WriteLine("WindowsMediaRedirect - Powered by MusicBrainz API\n");
-            Console.WriteLine("Assicurati che il file HOSTS sia configurato correttamente su " + ip + ":\n");
+            Console.WriteLine("WindowsMediaRedirect - Backend MusicBrainz Attivo\n");
+            Console.WriteLine("Aggiungi queste voci al file C:\\Windows\\System32\\drivers\\etc\\hosts:\n");
 
             foreach (string host in hosts) {
                 Console.WriteLine(ip + "\t" + host);
@@ -176,7 +183,7 @@ namespace WindowsMediaRedirect {
                 listener.Start();
                 Console.WriteLine("\nProxy in ascolto su {0}", "http://" + ip + ":80/");
             } catch (Exception) {
-                Console.WriteLine("\nImpossibile avviare il listener su http://{0}:80/. Esegui l'app come Amministratore.", ip);
+                Console.WriteLine("\nErrore: Esegui l'applicazione come Amministratore per consentire il bind sulla porta 80.");
                 return;
             }
 
@@ -184,4 +191,5 @@ namespace WindowsMediaRedirect {
             listener.Close();
         }
     }
+}
 }
