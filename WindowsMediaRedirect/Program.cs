@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Serialization;
 
@@ -24,120 +25,136 @@ namespace WindowsMediaRedirect {
         public static void HandleIncomingConnections() {
             while (true) {
                 HttpListenerContext ctx = listener.GetContext();
-
                 HttpListenerRequest req = ctx.Request;
                 HttpListenerResponse resp = ctx.Response;
 
-                Console.WriteLine("Request #: {0}", ++requestCount);
-                Console.WriteLine(req.Url.ToString());
-                Console.WriteLine(req.HttpMethod);
-                Console.WriteLine(req.UserHostName);
-                Console.WriteLine(req.UserAgent);
-                Console.WriteLine();
+                Console.WriteLine("Richiesta #{0}: {1}", ++requestCount, req.Url.ToString());
 
-                string target = "http://musicmatch-ssl.xboxlive.com/cdinfo/GetMDRCD.aspx" + req.Url.Query;
+                try {
+                    // 1. Gestione Metadati CD / Tracce
+                    if (req.Url.ToString().StartsWith("http://windowsmedia.com/redir/GetMDRCD.asp") || 
+                        req.Url.ToString().StartsWith("http://windowsmedia.com/redir/QueryTOC.asp")) {
+                        
+                        string queryString = req.Url.Query;
+                        OldMetadata.METADATA metadata = FetchMetadataFromMusicBrainz(queryString);
 
-                if (req.Url.ToString().StartsWith("http://windowsmedia.com/redir/GetMDRCD.asp") || req.Url.ToString().StartsWith("http://windowsmedia.com/redir/QueryTOC.asp")) {
-                    WebClient wc = new WebClient();
-                    wc.Encoding = System.Text.Encoding.UTF8;
-                    XmlSerializer newSerializer = new XmlSerializer(typeof(NewMetadata.METADATA));
-                    XmlSerializer oldSerializer = new XmlSerializer(typeof(OldMetadata.METADATA));
+                        XmlSerializer oldSerializer = new XmlSerializer(typeof(OldMetadata.METADATA));
+                        MemoryStream ms = new MemoryStream();
+                        
+                        using (XmlWriter writer = XmlWriter.Create(ms, new XmlWriterSettings { Encoding = Encoding.UTF8 })) {
+                            oldSerializer.Serialize(writer, metadata);
+                        }
 
-                    string xmlin;
-                    byte[] data;
+                        byte[] data = ms.ToArray();
+                        resp.ContentType = "text/xml";
+                        resp.ContentEncoding = Encoding.UTF8;
+                        resp.ContentLength64 = data.LongLength;
+                        resp.OutputStream.Write(data, 0, data.Length);
+                    } 
+                    // 2. Gestione Copertine (Cover Art Archive)
+                    else if (req.Url.ToString().Contains("/cover/")) {
+                        // Estrae l'ID della release MusicBrainz passato nel percorso della copertina
+                        string releaseId = ExtractReleaseId(req.Url.ToString());
+                        byte[] coverData = FetchCoverArt(releaseId);
 
-                    try {
-                        xmlin = wc.DownloadString(target);
-                        StringReader reader = new StringReader(xmlin);
-                        NewMetadata.METADATA newmeta = (NewMetadata.METADATA)newSerializer.Deserialize(reader);
-
-                        StringWriter swriter = new StringWriter();
-                        oldSerializer.Serialize(XmlWriter.Create(swriter), NewToOldMeta(newmeta));
-                        data = Encoding.UTF8.GetBytes(swriter.ToString());
-                    } catch (Exception ex) {
-                        Console.WriteLine(ex.ToString());
-                        resp.StatusCode = 500;
-                        resp.Close();
-                        return;
+                        if (coverData != null && coverData.Length > 0) {
+                            resp.ContentType = "image/jpeg";
+                            resp.ContentLength64 = coverData.LongLength;
+                            resp.OutputStream.Write(coverData, 0, coverData.Length);
+                        } else {
+                            resp.StatusCode = 404;
+                        }
+                    } else {
+                        resp.StatusCode = 404;
                     }
-
-                    resp.ContentType = "text/xml";
-                    resp.ContentEncoding = Encoding.UTF8;
-                    resp.ContentLength64 = data.LongLength;
-
-                    resp.OutputStream.Write(data, 0, data.Length);
-                } else if (req.Url.ToString().StartsWith("http://services.windowsmedia.com/cover/")) {
-                    string imgurl = req.Url.GetLeftPart(UriPartial.Path).Replace("http://services.windowsmedia.com/cover/", "http://musicimage.xboxlive.com/");
-                    WebClient wc = new WebClient();
-                    byte[] data;
-
-                    try {
-                        data = wc.DownloadData(imgurl);
-                    } catch (Exception ex) {
-                        Console.WriteLine(ex.ToString());
-                        resp.StatusCode = 500;
-                        resp.Close();
-                        return;
-                    }
-
-                    resp.ContentType = "image/jpeg";
-                    resp.ContentLength64 = data.LongLength;
-                    resp.OutputStream.Write(data, 0, data.Length);
-                } else if (req.Url.ToString().StartsWith("http://images.metaservices.microsoft.com/cover/")) {
-                    string imgurl = req.Url.GetLeftPart(UriPartial.Path).Replace("http://images.metaservices.microsoft.com/cover/https:/musicimage.xboxlive.com/", "http://musicimage.xboxlive.com/");
-                    resp.Redirect(imgurl);
-                } else {
-                    resp.Redirect(target);
+                } catch (Exception ex) {
+                    Console.WriteLine("Errore nell'elaborazione: " + ex.Message);
+                    resp.StatusCode = 500;
+                } finally {
+                    resp.Close();
                 }
-                resp.Close();
             }
         }
 
-        static OldMetadata.METADATA NewToOldMeta(NewMetadata.METADATA input) {
-            OldMetadata.METADATA output = new OldMetadata.METADATA();
-            output.MDRCD = new OldMetadata.MDRCD();
-            output.MDRCD.Version = "5.0";
-            output.MDRCD.MdqRequestID = input.MDRCD.MdqRequestID;
-            output.MDRCD.WMCollectionID = input.MDRCD.WMCollectionID;
-            output.MDRCD.WMCollectionGroupID = input.MDRCD.WMCollectionGroupID;
-            output.MDRCD.UniqueFileID = input.MDRCD.UniqueFileID;
-            output.MDRCD.AlbumTitle = input.MDRCD.AlbumTitle;
-            output.MDRCD.AlbumArtist = input.MDRCD.AlbumArtist;
-            output.MDRCD.ReleaseDate = input.MDRCD.ReleaseDate;
-            output.MDRCD.Label = input.MDRCD.Label;
-            output.MDRCD.Genre = input.MDRCD.Genre;
-            output.MDRCD.ProviderStyle = input.MDRCD.ProviderStyle;
-            output.MDRCD.PublisherRating = input.MDRCD.PublisherRating;
-            output.MDRCD.BuyParams = null;
-            output.MDRCD.LargeCoverParams = input.MDRCD.LargeCoverParams;
-            output.MDRCD.SmallCoverParams = null;
-            output.MDRCD.MoreInfoParams = input.MDRCD.MoreInfoParams;
-            output.MDRCD.DataProvider = input.MDRCD.DataProvider;
-            output.MDRCD.DataProviderParams = input.MDRCD.DataProviderParams;
-            output.MDRCD.DataProviderLogo = input.MDRCD.DataProviderLogo;
-            output.MDRCD.NeedIDs = input.MDRCD.NeedIDs;
-            output.MDRCD.Track = new List<OldMetadata.Track>();
+        // Chiamata all'API MusicBrainz usando WebClient con User-Agent personalizzato
+        static OldMetadata.METADATA FetchMetadataFromMusicBrainz(string query) {
+            OldMetadata.METADATA meta = new OldMetadata.METADATA();
+            meta.MDRCD = new OldMetadata.MDRCD();
+            meta.MDRCD.Version = "5.0";
+            meta.MDRCD.Track = new List<OldMetadata.Track>();
 
-            if (output.MDRCD.LargeCoverParams != null)
-                output.MDRCD.LargeCoverParams = output.MDRCD.LargeCoverParams.Replace("https://musicimage.xboxlive.com/", "");
+            // Estrazione di parametri di ricerca basici inviati da WMP
+            string albumSearch = ExtractQueryParam(query, "album") ?? "Unknown Album";
+            string artistSearch = ExtractQueryParam(query, "artist") ?? "Unknown Artist";
 
-            foreach (var trackin in input.MDRCD.Track) {
-                OldMetadata.Track trackout = new OldMetadata.Track();
-                trackout.WMContentID = trackin.WMContentID;
-                trackout.TrackRequestID = trackin.TrackRequestID;
-                trackout.TrackTitle = trackin.TrackTitle;
-                trackout.UniqueFileID = trackin.UniqueFileID;
-                trackout.TrackNumber = trackin.TrackNumber;
-                trackout.TrackPerformer = trackin.TrackPerformer;
-                trackout.TrackComposer = trackin.TrackComposer;
-                trackout.TrackConductor = trackin.TrackConductor;
-                trackout.Period = trackin.Period;
-                trackout.ExplicitLyrics = trackin.ExplicitLyrics;
-                output.MDRCD.Track.Add(trackout);
+            try {
+                using (WebClient wc = new WebClient()) {
+                    // MusicBrainz richiede obbligatoriamente un Header User-Agent identificativo
+                    wc.Headers.Add("User-Agent", "WMPRedirectProxy/2.0 ( contact@example.com )");
+                    wc.Encoding = Encoding.UTF8;
+
+                    // Query di ricerca su MusicBrainz (formato JSON)
+                    string searchUrl = string.Format("https://musicbrainz.org/ws/2/release/?query=release:{0}%20AND%20artist:{1}&fmt=json&limit=1", 
+                        Uri.EscapeDataString(albumSearch), Uri.EscapeDataString(artistSearch));
+
+                    string jsonResponse = wc.DownloadString(searchUrl);
+
+                    // Estrazione semplificata dei campi via Regex per compatibilità con vecchi .NET
+                    string mbid = ExtractJsonValue(jsonResponse, "id");
+                    string title = ExtractJsonValue(jsonResponse, "title") ?? albumSearch;
+
+                    meta.MDRCD.AlbumTitle = title;
+                    meta.MDRCD.AlbumArtist = artistSearch;
+                    meta.MDRCD.Genre = "Rock/Pop"; 
+                    meta.MDRCD.WMCollectionID = mbid ?? Guid.NewGuid().ToString();
+                    
+                    // Se abbiamo trovato un ID album, impostiamo il link per il recupero copertina
+                    if (!string.IsNullOrEmpty(mbid)) {
+                        meta.MDRCD.LargeCoverParams = "http://services.windowsmedia.com/cover/" + mbid;
+                    }
+                }
+            } catch (Exception ex) {
+                Console.WriteLine("MusicBrainz offline o nessun risultato trovato: " + ex.Message);
+                meta.MDRCD.AlbumTitle = "Album Sconosciuto";
+                meta.MDRCD.AlbumArtist = "Artista Sconosciuto";
             }
-            output.Backoff = new OldMetadata.Backoff();
-            output.Backoff.Time = input.Backoff.Time;
-            return output;
+
+            meta.Backoff = new OldMetadata.Backoff();
+            meta.Backoff.Time = "0";
+
+            return meta;
+        }
+
+        // Recupera l'immagine della copertina da Cover Art Archive (MusicBrainz)
+        static byte[] FetchCoverArt(string releaseId) {
+            if (string.IsNullOrEmpty(releaseId)) return null;
+
+            try {
+                using (WebClient wc = new WebClient()) {
+                    wc.Headers.Add("User-Agent", "WMPRedirectProxy/2.0 ( contact@example.com )");
+                    string coverUrl = string.Format("https://coverartarchive.org/release/{0}/front-250", releaseId);
+                    return wc.DownloadData(coverUrl);
+                }
+            } catch {
+                return null; // Copertina non disponibile
+            }
+        }
+
+        // Helper per estrarre parametri dalla query string
+        static string ExtractQueryParam(string query, string paramName) {
+            Match match = Regex.Match(query, paramName + "=([^&]+)", RegexOptions.IgnoreCase);
+            return match.Success ? Uri.UnescapeDataString(match.Groups[1].Value) : null;
+        }
+
+        // Helper semplice per estrarre chiavi JSON senza librerie esterne (es. Newtonsoft.Json)
+        static string ExtractJsonValue(string json, string key) {
+            Match match = Regex.Match(json, "\"" + key + "\"\\s*:\\s*\"([^\"]+)\"");
+            return match.Success ? match.Groups[1].Value : null;
+        }
+
+        static string ExtractReleaseId(string url) {
+            Match match = Regex.Match(url, @"/cover/([a-f0-9\-]+)");
+            return match.Success ? match.Groups[1].Value : string.Empty;
         }
 
         static void Main(string[] args) {
@@ -145,31 +162,25 @@ namespace WindowsMediaRedirect {
                 ip = args[0];
             }
 
-            Console.WriteLine("WindowsMediaRedirect 1.0 - Make Windows Media Player Metadata services work again! Works on:");
-            Console.WriteLine("\n  Windows Media Player 9 Series\n  Windows Media Player 10\n  Windows Media Player 11\n  Windows Media Player 12 (Windows 7)\n");
-            Console.WriteLine("To change the listening address, add the desired IP as parameter. Example:");
-            Console.WriteLine("\n  WindowsMediaRedirect.exe 192.168.1.123");
-            Console.WriteLine("\nSet the following hosts entries if you have not done that yet:\n");
+            Console.WriteLine("WindowsMediaRedirect - Powered by MusicBrainz API\n");
+            Console.WriteLine("Assicurati che il file HOSTS sia configurato correttamente su " + ip + ":\n");
+
             foreach (string host in hosts) {
                 Console.WriteLine(ip + "\t" + host);
             }
+
             listener = new HttpListener();
             listener.Prefixes.Add("http://" + ip + ":80/");
 
             try {
                 listener.Start();
+                Console.WriteLine("\nProxy in ascolto su {0}", "http://" + ip + ":80/");
             } catch (Exception) {
-                Console.WriteLine("\nCould not bind connection for {0}", "http://" + ip + ":80/");
-                Console.WriteLine("\nTry running this application with admin or root privileges");
+                Console.WriteLine("\nImpossibile avviare il listener su http://{0}:80/. Esegui l'app come Amministratore.", ip);
                 return;
             }
 
-            Console.WriteLine("\nListening for connections on {0}", "http://" + ip + ":80/");
-
-            // Handle requests
             HandleIncomingConnections();
-
-            // Close the listener
             listener.Close();
         }
     }
