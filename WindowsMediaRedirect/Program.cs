@@ -12,7 +12,7 @@ namespace WindowsMediaRedirect {
         public static string ip = "127.0.0.1";
         public static int requestCount = 0;
 
-        // Variabili globali per salvare l'artista e l'album correnti (compatibile C# 2.0)
+        // Variabili globali per memorizzare Artista e Album dell'ultimo CD richiesto
         public static string currentArtist = "";
         public static string currentAlbum = "";
 
@@ -41,6 +41,7 @@ namespace WindowsMediaRedirect {
 
                 string target = "http://musicmatch-ssl.xboxlive.com/cdinfo/GetMDRCD.aspx" + req.Url.Query;
 
+                // 1. GESTIONE METADATI CD (Titoli, traccia, artista, album)
                 if (req.Url.ToString().StartsWith("http://windowsmedia.com/redir/GetMDRCD.asp") || req.Url.ToString().StartsWith("http://windowsmedia.com/redir/QueryTOC.asp")) {
                     WebClient wc = new WebClient();
                     wc.Encoding = System.Text.Encoding.UTF8;
@@ -55,11 +56,11 @@ namespace WindowsMediaRedirect {
                         StringReader reader = new StringReader(xmlin);
                         NewMetadata.METADATA newmeta = (NewMetadata.METADATA)newSerializer.Deserialize(reader);
 
-                        // Salviamo Artista e Album per poterli usare se il download della copertina da Microsoft fallisce
+                        // Salviamo l'Artista e l'Album per usarli nella ricerca su iTunes
                         if (newmeta != null && newmeta.MDRCD != null) {
                             currentArtist = newmeta.MDRCD.AlbumArtist;
                             currentAlbum = newmeta.MDRCD.AlbumTitle;
-                            Console.WriteLine("Trovato album: " + currentArtist + " - " + currentAlbum);
+                            Console.WriteLine("Album identificato: " + currentArtist + " - " + currentAlbum);
                         }
 
                         StringWriter swriter = new StringWriter();
@@ -75,31 +76,29 @@ namespace WindowsMediaRedirect {
                     resp.ContentType = "text/xml";
                     resp.ContentEncoding = Encoding.UTF8;
                     resp.ContentLength64 = data.LongLength;
-
                     resp.OutputStream.Write(data, 0, data.Length);
-                } else if (req.Url.ToString().StartsWith("http://services.windowsmedia.com/cover/")) {
-                    string imgurl = req.Url.GetLeftPart(UriPartial.Path).Replace("http://services.windowsmedia.com/cover/", "http://musicimage.xboxlive.com/");
-                    WebClient wc = new WebClient();
+
+                // 2. GESTIONE COPERTINE (Preleva l'immagine DIRETTAMENTE da iTunes)
+                } else if (req.Url.ToString().StartsWith("http://services.windowsmedia.com/cover/") || 
+                           req.Url.ToString().StartsWith("http://images.metaservices.microsoft.com/cover/")) {
+                    
                     byte[] data = null;
 
-                    // 1. Tenta prima il download dal server ufficiale Microsoft
-                    try {
-                        data = wc.DownloadData(imgurl);
-                    } catch {
-                        Console.WriteLine("Server Microsoft fallito per l'immagine. Tentativo di fallback su iTunes...");
+                    if (!string.IsNullOrEmpty(currentArtist) && !string.IsNullOrEmpty(currentAlbum)) {
+                        Console.WriteLine("Ricerca copertina su iTunes per: " + currentArtist + " - " + currentAlbum);
+                        string iTunesUrl = GetiTunesCoverUrl(currentArtist, currentAlbum);
                         
-                        // 2. Fallback su iTunes se il server Microsoft fallisce
-                        if (!string.IsNullOrEmpty(currentArtist) && !string.IsNullOrEmpty(currentAlbum)) {
-                            string iTunesUrl = GetiTunesCoverUrl(currentArtist, currentAlbum);
-                            if (!string.IsNullOrEmpty(iTunesUrl)) {
-                                try {
-                                    data = wc.DownloadData(iTunesUrl);
-                                    Console.WriteLine("Copertina scaricata con successo da iTunes!");
-                                } catch (Exception ex) {
-                                    Console.WriteLine("Errore download copertina da iTunes: " + ex.Message);
-                                }
+                        if (!string.IsNullOrEmpty(iTunesUrl)) {
+                            try {
+                                WebClient wc = new WebClient();
+                                data = wc.DownloadData(iTunesUrl);
+                                Console.WriteLine("Copertina scaricata con successo da iTunes!");
+                            } catch (Exception ex) {
+                                Console.WriteLine("Errore durante il download dell'immagine da iTunes: " + ex.Message);
                             }
                         }
+                    } else {
+                        Console.WriteLine("Artista o Album non impostati, impossibile cercare su iTunes.");
                     }
 
                     if (data != null) {
@@ -109,23 +108,22 @@ namespace WindowsMediaRedirect {
                     } else {
                         resp.StatusCode = 404;
                     }
-                } else if (req.Url.ToString().StartsWith("http://images.metaservices.microsoft.com/cover/")) {
-                    string imgurl = req.Url.GetLeftPart(UriPartial.Path).Replace("http://images.metaservices.microsoft.com/cover/https:/musicimage.xboxlive.com/", "http://musicimage.xboxlive.com/");
-                    resp.Redirect(imgurl);
+
                 } else {
                     resp.Redirect(target);
                 }
+
                 resp.Close();
             }
         }
 
-        // Funzione di ricerca su iTunes (100% C# 2.0 / .NET 2.0)
+        // Funzione per la ricerca su API iTunes (100% C# 2.0)
         static string GetiTunesCoverUrl(string artist, string album) {
             try {
                 WebClient wc = new WebClient();
                 wc.Encoding = Encoding.UTF8;
 
-                // Tenta di abilitare TLS 1.2 se supportato dal sistema operativo
+                // Tenta di abilitare TLS 1.2 per OS/Framework che lo supportano
                 try {
                     ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072;
                 } catch { }
@@ -133,18 +131,18 @@ namespace WindowsMediaRedirect {
                 string query = Uri.EscapeDataString(artist + " " + album);
                 string json = wc.DownloadString("https://itunes.apple.com/search?term=" + query + "&entity=album&limit=1");
 
-                // Estrazione manuale della stringa (Senza JSON parser esterni)
+                // Estrazione manuale della stringa senza librerie JSON esterne
                 int index = json.IndexOf("\"artworkUrl100\":\"");
                 if (index != -1) {
                     index += 17;
                     int end = json.IndexOf("\"", index);
                     string url = json.Substring(index, end - index);
                     
-                    // Sostituisce 100x100 con 600x600 per copertine ad alta definizione
+                    // Sostituisce la risoluzione 100x100 con 600x600 per avere un'immagine ad alta qualità
                     return url.Replace("100x100bb.jpg", "600x600bb.jpg");
                 }
             } catch (Exception ex) {
-                Console.WriteLine("Ricerca iTunes fallita: " + ex.Message);
+                Console.WriteLine("Errore API iTunes: " + ex.Message);
             }
             return null;
         }
