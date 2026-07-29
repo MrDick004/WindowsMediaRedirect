@@ -1,18 +1,18 @@
 # WindowsMediaRedirect
-This tool allows older Windows Media Player versions to connect to the metadata servers hosted by Microsoft.
+Questo strumento consente alle versioni più vecchie di Windows Media Player di connettersi ai server dei metadati ospitati da Microsoft.
 
-Supported Versions:
+Versioni supportate:
 - Windows Media Player 9 Series
 - Windows Media Player 10
 - Windows Media Player 11
-- Windows Media Player 12 (on Windows 7, Windows 8 and newer don't need this)
+- Windows Media Player 12 (su Windows 7; Windows 8 e versioni successive non ne hanno bisogno)
 
-## How to use
-Simply copy and run the WindowsMediaRedirector.exe on the target computer. On Windows Vista and newer you may need to launch it as Administrator.
+## Come usarlo
+È sufficiente copiare ed eseguire il file `WindowsMediaRedirector.exe` sul computer di destinazione. Su Windows Vista e versioni successive potrebbe essere necessario avviarlo come Amministratore.
 
-If you wish to set this tool up as a server for multiple devices in your network, simply launch it in a command line with the IP address it should listen on as the first parameter. You may also need to allow connections in the firewall.
+Se desideri configurare questo strumento come server per più dispositivi nella tua rete locale, avvialo semplicemente da riga di comando passando l'indirizzo IP su cui deve rimanere in ascolto come primo parametro. Potrebbe anche essere necessario autorizzare le connessioni nel firewall.
 
-After the application launches, it displays all the entries that need to be added in the hosts file. It should look like this:
+Dopo l'avvio dell'applicazione, verranno mostrate tutte le voci da aggiungere al file `hosts`. Dovrebbe apparire così:
 
 ```
 127.0.0.1       redir.metaservices.microsoft.com
@@ -23,38 +23,38 @@ After the application launches, it displays all the entries that need to be adde
 127.0.0.1       services.windowsmedia.com
 ```
 
-The hosts file can usually be found here:
+Il file `hosts` si trova solitamente in questi percorsi:
 
-- C:\WINDOWS\hosts  --  (Windows 98 and Me)
-- C:\WINNT\system32\drivers\etc\hosts -- (Windows 2000)
-- C:\WINDOWS\system32\drivers\etc\hosts -- (Windows XP, Vista and 7)
+- `C:\WINDOWS\hosts` -- (Windows 98 e Me)
+- `C:\WINNT\system32\drivers\etc\hosts` -- (Windows 2000)
+- `C:\WINDOWS\system32\drivers\etc\hosts` -- (Windows XP, Vista e 7)
 
-Please note that on Windows Vista and 7 you need administrator privileges to edit the file. The easiest way is to copy the file to the desktop, modify it, and copy it back into the etc folder.
+Nota che su Windows Vista e 7 sono necessari i privilegi di amministratore per modificare il file. Il modo più semplice è copiare il file sul desktop, modificarlo e ricopiarlo all'interno della cartella `etc`.
 
-On Windows 98 and Me the hosts file might not exist. Just rename the hosts.sam to hosts. Furthermore if you encounter issues you might need to enable DNS resolution in the TCP-IP settings within the network settings, otherwise the hosts file could be ignored.
+Su Windows 98 e Me il file `hosts` potrebbe non esistere. In tal caso, basta rinominare il file `hosts.sam` in `hosts`. Inoltre, se riscontri problemi, potrebbe essere necessario abilitare la risoluzione DNS nelle impostazioni TCP/IP all'interno delle configurazioni di rete, altrimenti il file `hosts` potrebbe venire ignorato.
 
 ## FAQ
-### Why is this needed?
-Microsoft has changed the URLs that are used to request the media information in Windows Media Player without setting up a proper redirect for the old domains that are still owned by Microsoft.
+### Perché è necessario questo strumento?
+Microsoft ha modificato gli URL utilizzati per richiedere le informazioni sui file multimediali in Windows Media Player senza impostare un reindirizzamento corretto per i vecchi domini, che sono tuttora di proprietà di Microsoft.
 
-### How does this tool work?
-This tool creates a small web server that redirects certain old known addresses to the new metadata servers. This works in combination with some entries to the hosts file.
+### Come funziona questo strumento?
+Questo strumento crea un piccolo server web che reindirizza alcuni vecchi indirizzi noti verso i nuovi server di metadati. Funziona in combinazione con l'aggiunta di alcune voci nel file `hosts`.
 
-### Why is Windows Media Player 7 or 8 not supported?
-Older Windows Media Player versions expects an entirely differen XML format for which I could not find any examples or references.
+### Perché Windows Media Player 7 o 8 non sono supportati?
+Le versioni più vecchie di Windows Media Player richiedono un formato XML completamente diverso, di cui non sono riuscito a trovare esempi o documentazione di riferimento.
 
-### Why is a conversion of metadata taking place / Why are album images not always redirected
-Windows Media Player 9 Series is a bit picky with the exact XML format so I had to convert it to the style it expects. Furthermore WMP 9 seems to ignore HTTP 302 responses most of the times when it tries to fetch the album image, thus it has to be downloaded and delivered by this tool.
+### Perché avviene una conversione dei metadati / Perché le immagini degli album non vengono sempre reindirizzate?
+Windows Media Player 9 Series è un po' esigente riguardo all'esatto formato XML, quindi ho dovuto convertirlo nello stile che si aspetta. Inoltre, WMP 9 sembra ignorare le risposte HTTP 302 nella maggior parte dei casi quando tenta di scaricare l'immagine dell'album, motivo per cui l'immagine deve essere scaricata e fornita direttamente da questo strumento.
 
-### Why does the code look so unoptimized
-The code is written to be compatible with C# 2.0 so that it can be compiled using Visual Studio 2005. This ensures that the resulting .exe is compatible with all old Windows versions that can run the .NET Framework 2.0.
+### Perché il codice sembra poco ottimizzato?
+Il codice è stato scritto per essere compatibile con C# 2.0, in modo da poter essere compilato utilizzando Visual Studio 2005. Questo garantisce che l'eseguibile (`.exe`) risultante sia compatibile con tutte le vecchie versioni di Windows in grado di eseguire .NET Framework 2.0.
 
-### Why do the "Find Album Info" or "View Album Info" buttons not work?
-This tool only fixes the automatic metadata lookup that happens the first time an Audio-CD is inserted into the CD drive. The buttons use a web interface to allow looking up for the correct information, however that service has been discontinued since many years and would be very difficult to recreate.
+### Perché i pulsanti "Trova informazioni album" o "Visualizza informazioni album" non funzionano?
+Questo strumento corregge solo la ricerca automatica dei metadati che avviene la prima volta che un CD Audio viene inserito nel lettore. Quei pulsanti utilizzano un'interfaccia web per consentire la ricerca manuale delle informazioni corrette, tuttavia quel servizio è stato dismesso da molti anni e sarebbe molto difficile da ricreare.
 
-### Wrong metadata was downloaded / edited. How can I delete them all?
-Simply delete all files in this folder:
+### Sono stati scaricati o modificati metadati errati. Come posso eliminarli tutti?
+È sufficiente eliminare tutti i file all'interno di questa cartella:
 
-- C:\WINDOWS\Application Data\Microsoft\Media Player --  (Windows 98 and Me)
-- C:\Documents and Settings\User\Local Settings\Application Data\Microsoft\Media Player  --  (Windows 2000 and XP)
-- C:\Users\User\AppData\Local\Microsoft\Media Player  --  (Windows Vista and 7)
+- `C:\WINDOWS\Application Data\Microsoft\Media Player` -- (Windows 98 e Me)
+- `C:\Documents and Settings\Utente\Local Settings\Application Data\Microsoft\Media Player` -- (Windows 2000 e XP)
+- `C:\Users\Utente\AppData\Local\Microsoft\Media Player` -- (Windows Vista e 7)
